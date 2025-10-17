@@ -227,20 +227,62 @@
             });
         });
 
-        function getDifferences(obj1, obj2) {
+        function findDeepDifferences(obj1, obj2, path = '') {
             const diff = {};
-            const allKeys = new Set([...Object.keys(obj1), ...Object.keys(obj2)]);
-            
+            const allKeys = new Set([...(obj1 ? Object.keys(obj1) : []), ...(obj2 ? Object.keys(obj2) : [])]);
+
             allKeys.forEach(key => {
-                 if (JSON.stringify(obj1[key]) !== JSON.stringify(obj2[key])) {
-                    diff[key] = { 
-                        from: obj1.hasOwnProperty(key) ? obj1[key] : 'No definido', 
-                        to: obj2.hasOwnProperty(key) ? obj2[key] : 'No definido' 
-                    };
-                 }
+                const newPath = path ? `${path}.${key}` : key;
+                const val1 = obj1 ? obj1[key] : undefined;
+                const val2 = obj2 ? obj2[key] : undefined;
+
+                if (JSON.stringify(val1) === JSON.stringify(val2)) return;
+
+                if (typeof val1 === 'object' && val1 !== null && typeof val2 === 'object' && val2 !== null && !Array.isArray(val1) && !Array.isArray(val2)) {
+                    Object.assign(diff, findDeepDifferences(val1, val2, newPath));
+                } else if (Array.isArray(val1) || Array.isArray(val2)) {
+                    const arr1 = Array.isArray(val1) ? val1 : [];
+                    const arr2 = Array.isArray(val2) ? val2 : [];
+
+                    if (arr1.every(item => typeof item === 'string') && arr2.every(item => typeof item === 'string')) {
+                        const set1 = new Set(arr1);
+                        const set2 = new Set(arr2);
+                        const added = [...set2].filter(x => !set1.has(x));
+                        const removed = [...set1].filter(x => !set2.has(x));
+                        if (added.length > 0 || removed.length > 0) {
+                            diff[newPath] = { added, removed };
+                        }
+                    } else if ((arr1.length > 0 && typeof arr1[0] === 'object') || (arr2.length > 0 && typeof arr2[0] === 'object')) {
+                        const maxLength = Math.max(arr1.length, arr2.length);
+                        for (let i = 0; i < maxLength; i++) {
+                            const item1 = arr1[i];
+                            const item2 = arr2[i];
+                            const itemPath = `${newPath}[${i}]`;
+
+                            if (i >= arr2.length) { // Item removed from end
+                                diff[itemPath] = { removed: item1 };
+                            } else if (i >= arr1.length) { // Item added to end
+                                diff[itemPath] = { added: item2 };
+                            } else if (JSON.stringify(item1) !== JSON.stringify(item2)) {
+                                Object.assign(diff, findDeepDifferences(item1, item2, itemPath));
+                            }
+                        }
+                    } else if (JSON.stringify(arr1) !== JSON.stringify(arr2)) {
+                        diff[newPath] = { from: val1, to: val2 };
+                    }
+                } else {
+                    diff[newPath] = { from: val1 === undefined ? 'No definido' : val1, to: val2 === undefined ? 'No definido' : val2 };
+                }
             });
+
             return diff;
         }
+
+
+        function getDifferences(obj1, obj2) {
+            return findDeepDifferences(obj1, obj2);
+        }
+
 
         function displayReport(changes) {
             const reportContent = document.getElementById('report-content');
@@ -288,9 +330,22 @@
                 } else if (change.type === 'MODIFICADA') {
                     bgColor = 'bg-yellow-100';
                     titleColor = 'text-yellow-800';
-                    detailsHtml += '<ul class="list-disc list-inside mt-2 space-y-1 text-sm">';
+                    detailsHtml += '<ul class="list-disc list-inside mt-2 space-y-2 text-sm">';
                     for (const key in change.details) {
-                        detailsHtml += `<li class="text-yellow-900"><strong class="font-semibold">${key}:</strong> cambió de <code class="bg-yellow-200 text-yellow-800 rounded px-1 text-xs">${JSON.stringify(change.details[key].from)}</code> a <code class="bg-yellow-200 text-yellow-800 rounded px-1 text-xs">${JSON.stringify(change.details[key].to)}</code></li>`;
+                        const detail = change.details[key];
+                        if (detail.hasOwnProperty('added') && detail.hasOwnProperty('removed')) { // For string arrays
+                            let itemHtml = `<li class="text-yellow-900"><strong class="font-semibold">${key}:</strong>`;
+                            if (detail.added.length > 0) itemHtml += ` <span class="text-green-700 font-medium">+ Añadido:</span> <code class="bg-green-200 text-green-800 rounded px-1 text-xs">${JSON.stringify(detail.added)}</code>`;
+                            if (detail.removed.length > 0) itemHtml += ` <span class="text-red-700 font-medium">- Eliminado:</span> <code class="bg-red-200 text-red-800 rounded px-1 text-xs">${JSON.stringify(detail.removed)}</code>`;
+                            itemHtml += '</li>';
+                            detailsHtml += itemHtml;
+                        } else if (detail.hasOwnProperty('added')) { // For an added object in an array
+                            detailsHtml += `<li class="text-green-700"><strong class="font-semibold">${key}:</strong> <span class="font-medium">+ Se añadió el objeto:</span> <code class="bg-green-200 text-green-800 rounded px-1 text-xs">${JSON.stringify(detail.added)}</code></li>`;
+                        } else if (detail.hasOwnProperty('removed')) { // For a removed object in an array
+                            detailsHtml += `<li class="text-red-700"><strong class="font-semibold">${key}:</strong> <span class="font-medium">- Se eliminó el objeto:</span> <code class="bg-red-200 text-red-800 rounded px-1 text-xs">${JSON.stringify(detail.removed)}</code></li>`;
+                        } else { // For regular value changes
+                            detailsHtml += `<li class="text-yellow-900"><strong class="font-semibold">${key}:</strong> cambió de <code class="bg-yellow-200 text-yellow-800 rounded px-1 text-xs break-all">${JSON.stringify(detail.from)}</code> a <code class="bg-yellow-200 text-yellow-800 rounded px-1 text-xs break-all">${JSON.stringify(detail.to)}</code></li>`;
+                        }
                     }
                     detailsHtml += '</ul>';
                 }
@@ -304,7 +359,7 @@
                             </div>
                             <span class="text-xs text-gray-500">${new Date(change.date).toLocaleString()}</span>
                         </div>
-                        <div class="mt-3">
+                        <div class="mt-3 overflow-hidden">
                             ${detailsHtml}
                         </div>
                     </div>
@@ -385,9 +440,22 @@
                 const date = new Date(change.date).toLocaleString();
                 if(change.type === 'MODIFICADA') {
                     for(const key in change.details) {
-                        const from = JSON.stringify(change.details[key].from).replace(/"/g, '""');
-                        const to = JSON.stringify(change.details[key].to).replace(/"/g, '""');
-                        csvContent += `${change.type},${change.id},"${change.name}",${date},${key},"${from}","${to}"\n`;
+                        const detail = change.details[key];
+                        let from = "N/A", to = "N/A";
+                        if(detail.hasOwnProperty('added') && detail.hasOwnProperty('removed')){
+                            from = `Eliminados: ${JSON.stringify(detail.removed)}`;
+                            to = `Añadidos: ${JSON.stringify(detail.added)}`;
+                        } else if (detail.hasOwnProperty('added')) {
+                            to = `Añadido: ${JSON.stringify(detail.added)}`;
+                        } else if (detail.hasOwnProperty('removed')) {
+                            from = `Eliminado: ${JSON.stringify(detail.removed)}`;
+                        }
+                        else {
+                            from = JSON.stringify(detail.from);
+                            to = JSON.stringify(detail.to);
+                        }
+                        
+                        csvContent += `${change.type},${change.id},"${change.name}",${date},${key},"${from.replace(/"/g, '""')}","${to.replace(/"/g, '""')}"\n`;
                     }
                 } else {
                      csvContent += `${change.type},${change.id},"${change.name}",${date},N/A,N/A,N/A\n`;
@@ -440,9 +508,20 @@
                             doc.addPage();
                             y = 15;
                          }
-                        const from = JSON.stringify(change.details[key].from);
-                        const to = JSON.stringify(change.details[key].to);
-                        const lines = doc.splitTextToSize(`- Campo '${key}' cambió de '${from}' a '${to}'`, 180);
+                        
+                        const detail = change.details[key];
+                        let lines;
+                        if(detail.hasOwnProperty('added') && detail.hasOwnProperty('removed')){
+                             lines = doc.splitTextToSize(`- Campo '${key}': \n   + Añadido: ${JSON.stringify(detail.added)} \n   - Eliminado: ${JSON.stringify(detail.removed)}`, 180);
+                        } else if (detail.hasOwnProperty('added')) {
+                             lines = doc.splitTextToSize(`- Campo '${key}': \n   + Se añadió: ${JSON.stringify(detail.added)}`, 180);
+                        } else if (detail.hasOwnProperty('removed')) {
+                             lines = doc.splitTextToSize(`- Campo '${key}': \n   - Se eliminó: ${JSON.stringify(detail.removed)}`, 180);
+                        }
+                        else {
+                             lines = doc.splitTextToSize(`- Campo '${key}' cambió de '${JSON.stringify(detail.from)}' a '${JSON.stringify(detail.to)}'`, 180);
+                        }
+                        
                         doc.text(lines, 18, y);
                         y += (lines.length * 5);
                     }
